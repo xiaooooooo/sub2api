@@ -31,28 +31,42 @@
       :description="t('channelStatus.empty.description')"
     />
 
-    <div
-      v-else
-      class="grid gap-5 grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4"
-    >
-      <MonitorCard
-        v-for="item in items"
-        :key="item.id"
-        :item="item"
-        :window="window"
-        :availability-value="resolveAvailability(item)"
-        :countdown-seconds="countdownSeconds"
-        @click="emit('cardClick', item)"
-      />
+    <div v-else class="space-y-8">
+      <section
+        v-for="group in providerGroups"
+        :key="group.provider"
+        class="space-y-3"
+        :aria-label="providerLabel(group.provider)"
+      >
+        <h2 class="flex items-center gap-2 text-lg font-semibold text-gray-900 dark:text-gray-100">
+          <ProviderIcon :provider="group.provider" :size="20" />
+          {{ providerLabel(group.provider) }}
+          <span class="text-sm font-normal text-gray-500 dark:text-gray-400">({{ group.items.length }})</span>
+        </h2>
+        <div class="grid gap-5 grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+          <MonitorCard
+            v-for="item in group.items"
+            :key="item.id"
+            :item="item"
+            :window="window"
+            :availability-value="resolveAvailability(item)"
+            :countdown-seconds="countdownSeconds"
+            @click="emit('cardClick', item)"
+          />
+        </div>
+      </section>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { UserMonitorView, UserMonitorDetail } from '@/api/channelMonitor'
+import { useChannelMonitorFormat } from '@/composables/useChannelMonitorFormat'
 import EmptyState from '@/components/common/EmptyState.vue'
 import MonitorCard from './MonitorCard.vue'
+import ProviderIcon from './ProviderIcon.vue'
 
 const props = defineProps<{
   items: UserMonitorView[]
@@ -67,6 +81,18 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+const { providerLabel } = useChannelMonitorFormat()
+
+const providerGroups = computed(() => {
+  const groups = new Map<string, UserMonitorView[]>()
+  for (const item of props.items) {
+    const provider = item.provider || ''
+    const group = groups.get(provider) || []
+    group.push(item)
+    groups.set(provider, group)
+  }
+  return Array.from(groups, ([provider, items]) => ({ provider, items }))
+})
 
 function resolveAvailability(item: UserMonitorView): number | null {
   if (props.window === '7d') {
