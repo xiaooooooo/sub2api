@@ -34,6 +34,20 @@
 
       <button
         type="button"
+        class="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-colors"
+        :class="reordering
+          ? 'bg-primary-100 text-primary-700 dark:bg-primary-500/15 dark:text-primary-300'
+          : 'text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-dark-700 dark:hover:text-gray-200'"
+        :aria-pressed="reordering"
+        :title="reordering ? t('channelStatus.finishOrdering') : t('channelStatus.startOrdering')"
+        @click="emit('toggleReordering')"
+      >
+        <Icon :name="reordering ? 'check' : 'sort'" size="sm" />
+        <span>{{ reordering ? t('channelStatus.finishOrdering') : t('channelStatus.startOrdering') }}</span>
+      </button>
+
+      <button
+        type="button"
         class="h-8 w-8 rounded-lg flex items-center justify-center text-gray-500 hover:text-gray-700 hover:bg-gray-100 dark:text-gray-400 dark:hover:text-gray-200 dark:hover:bg-dark-700 transition-colors disabled:opacity-50"
         :disabled="loading"
         :title="t('common.refresh')"
@@ -68,6 +82,7 @@ const props = defineProps<{
   intervalSeconds: number
   window: MonitorWindow
   loading: boolean
+  reordering: boolean
   autoRefresh?: {
     enabled: { value: boolean }
     intervalSeconds: { value: number }
@@ -80,6 +95,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'update:window', value: MonitorWindow): void
+  (e: 'toggleReordering'): void
   (e: 'refresh'): void
 }>()
 

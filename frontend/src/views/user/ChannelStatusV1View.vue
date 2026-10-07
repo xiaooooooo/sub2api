@@ -5,8 +5,10 @@
       :interval-seconds="DEFAULT_INTERVAL_SECONDS"
       :window="currentWindow"
       :loading="loading"
+      :reordering="reordering"
       :auto-refresh="autoRefresh"
       @update:window="handleWindowChange"
+      @toggle-reordering="reordering = !reordering"
       @refresh="manualReload"
     />
 
@@ -15,6 +17,7 @@
       :window="currentWindow"
       :countdown-seconds="countdown"
       :loading="loading"
+      :reordering="reordering"
       :detail-cache="detailCache"
       @card-click="openDetail"
     />
@@ -55,6 +58,7 @@ const appStore = useAppStore()
 // ── State ──
 const items = ref<UserMonitorView[]>([])
 const loading = ref(false)
+const reordering = ref(false)
 const currentWindow = ref<MonitorWindow>('7d')
 const detailCache = reactive<Record<number, UserMonitorDetail>>({})
 const showDetail = ref(false)

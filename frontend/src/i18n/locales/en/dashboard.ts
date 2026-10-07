@@ -571,6 +571,10 @@ export default {
     detailLoadError: 'Failed to load channel detail',
     detailTitle: 'Channel Detail',
     closeDetail: 'Close',
+    startOrdering: 'Adjust order',
+    finishOrdering: 'Done ordering',
+    dragProvider: 'Drag provider group',
+    dragChannel: 'Drag channel',
     windowTab: {
       '7d': '7 days',
       '15d': '15 days',

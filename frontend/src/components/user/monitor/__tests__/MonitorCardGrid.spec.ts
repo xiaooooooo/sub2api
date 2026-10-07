@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import MonitorCardGrid from '../MonitorCardGrid.vue'
 import type { UserMonitorView } from '@/api/channelMonitor'
@@ -17,6 +17,8 @@ const MonitorCardStub = {
   emits: ['click'],
   template: '<button class="monitor-card" @click="$emit(\'click\')">{{ item.name }}</button>'
 }
+
+const MONITOR_ORDER_STORAGE_KEY = 'sub2api:channel-monitor-order:v1'
 
 function makeItem(id: number, provider: string, name: string): UserMonitorView {
   return {
@@ -41,11 +43,13 @@ function mountGrid(items: UserMonitorView[]) {
       window: '7d',
       countdownSeconds: 0,
       loading: false,
+      reordering: false,
       detailCache: {}
     },
     global: {
       stubs: {
         MonitorCard: MonitorCardStub,
+        VueDraggable: { template: '<div><slot /></div>' },
         ProviderIcon: true,
         EmptyState: true
       }
@@ -54,6 +58,10 @@ function mountGrid(items: UserMonitorView[]) {
 }
 
 describe('MonitorCardGrid', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
   it('groups cards by provider while keeping each provider section ordered by first occurrence', () => {
     const wrapper = mountGrid([
       makeItem(1, 'openai', 'first OpenAI'),
@@ -90,14 +98,70 @@ describe('MonitorCardGrid', () => {
         window: '7d',
         countdownSeconds: 0,
         loading: false,
+        reordering: false,
         detailCache: {}
       },
-      global: { stubs: { MonitorCard: MonitorCardStub, ProviderIcon: true } }
+      global: {
+        stubs: {
+          MonitorCard: MonitorCardStub,
+          VueDraggable: { template: '<div><slot /></div>' },
+          ProviderIcon: true
+        }
+      }
     })
 
     await wrapper.get('.monitor-card').trigger('click')
 
     expect(wrapper.emitted('cardClick')).toEqual([[item]])
+    wrapper.unmount()
+  })
+
+  it('restores provider and channel order from localStorage', () => {
+    localStorage.setItem(MONITOR_ORDER_STORAGE_KEY, JSON.stringify({
+      providers: ['anthropic', 'openai'],
+      channels: { openai: [3, 1] }
+    }))
+
+    const wrapper = mountGrid([
+      makeItem(1, 'openai', 'first OpenAI'),
+      makeItem(2, 'anthropic', 'Anthropic'),
+      makeItem(3, 'openai', 'second OpenAI')
+    ])
+
+    const sections = wrapper.findAll('section')
+    expect(sections[0]?.attributes('aria-label')).toBe('anthropic')
+    expect(sections[1]?.attributes('aria-label')).toBe('openai')
+    expect(sections[1]?.text().indexOf('second OpenAI')).toBeLessThan(sections[1]?.text().indexOf('first OpenAI') ?? 0)
+    wrapper.unmount()
+  })
+
+  it('appends new providers and channels without changing saved items', () => {
+    localStorage.setItem(MONITOR_ORDER_STORAGE_KEY, JSON.stringify({
+      providers: ['openai'],
+      channels: { openai: [1] }
+    }))
+
+    const wrapper = mountGrid([
+      makeItem(2, 'anthropic', 'Anthropic'),
+      makeItem(1, 'openai', 'OpenAI'),
+      makeItem(3, 'openai', 'New OpenAI')
+    ])
+
+    const sections = wrapper.findAll('section')
+    expect(sections[0]?.attributes('aria-label')).toBe('openai')
+    expect(sections[0]?.text().indexOf('OpenAI')).toBeLessThan(sections[0]?.text().indexOf('New OpenAI') ?? 0)
+    expect(sections[1]?.attributes('aria-label')).toBe('anthropic')
+    wrapper.unmount()
+  })
+
+  it('ignores malformed saved ordering data', () => {
+    localStorage.setItem(MONITOR_ORDER_STORAGE_KEY, '{not-json')
+    const wrapper = mountGrid([
+      makeItem(1, 'openai', 'OpenAI'),
+      makeItem(2, 'anthropic', 'Anthropic')
+    ])
+
+    expect(wrapper.findAll('section')[0]?.attributes('aria-label')).toBe('openai')
     wrapper.unmount()
   })
 })

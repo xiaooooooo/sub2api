@@ -576,6 +576,10 @@ export default {
     detailLoadError: '加载渠道详情失败',
     detailTitle: '渠道详情',
     closeDetail: '关闭',
+    startOrdering: '调整排序',
+    finishOrdering: '完成排序',
+    dragProvider: '拖动供应商分组',
+    dragChannel: '拖动渠道',
     windowTab: {
       '7d': '7 天',
       '15d': '15 天',
