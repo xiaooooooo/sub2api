@@ -209,6 +209,9 @@ func (r *channelMonitorRepository) List(ctx context.Context, params service.Chan
 func (r *channelMonitorRepository) ListEnabled(ctx context.Context) ([]*service.ChannelMonitor, error) {
 	rows, err := r.client.ChannelMonitor.Query().
 		Where(channelmonitor.EnabledEQ(true)).
+		// 显式按 ID 升序：Postgres 在无 ORDER BY 时返回顺序不稳定，
+		// 而监控行每次巡检都会 UPDATE，导致用户端渠道列表顺序来回跳动。
+		Order(dbent.Asc(channelmonitor.FieldID)).
 		All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list enabled monitors: %w", err)

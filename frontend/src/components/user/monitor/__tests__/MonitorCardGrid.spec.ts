@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { nextTick } from 'vue'
 import MonitorCardGrid from '../MonitorCardGrid.vue'
 import type { UserMonitorView } from '@/api/channelMonitor'
 
@@ -16,6 +17,15 @@ const MonitorCardStub = {
   props: ['item'],
   emits: ['click'],
   template: '<button class="monitor-card" @click="$emit(\'click\')">{{ item.name }}</button>'
+}
+
+// 模拟 vue-draggable-plus 的 v-model 契约：拖拽结束后 Sortable 会先同步
+// modelValue（update:modelValue），再触发 end 事件。
+const DraggableStub = {
+  name: 'VueDraggable',
+  props: ['modelValue', 'itemKey', 'animation', 'disabled', 'handle'],
+  emits: ['update:modelValue', 'end'],
+  template: '<div><slot /></div>'
 }
 
 const MONITOR_ORDER_STORAGE_KEY = 'sub2api:channel-monitor-order:v1'
@@ -49,7 +59,7 @@ function mountGrid(items: UserMonitorView[]) {
     global: {
       stubs: {
         MonitorCard: MonitorCardStub,
-        VueDraggable: { template: '<div><slot /></div>' },
+        VueDraggable: DraggableStub,
         ProviderIcon: true,
         EmptyState: true
       }
@@ -104,7 +114,7 @@ describe('MonitorCardGrid', () => {
       global: {
         stubs: {
           MonitorCard: MonitorCardStub,
-          VueDraggable: { template: '<div><slot /></div>' },
+          VueDraggable: DraggableStub,
           ProviderIcon: true
         }
       }
@@ -162,6 +172,74 @@ describe('MonitorCardGrid', () => {
     ])
 
     expect(wrapper.findAll('section')[0]?.attributes('aria-label')).toBe('openai')
+    wrapper.unmount()
+  })
+
+  // 回归：组件首次挂载时 props.items 还是空数组，此时不能把已保存的排序写空，
+  // 否则用户每次刷新页面都会丢失自定义顺序。
+  it('keeps the saved order when it mounts before the items arrive', () => {
+    localStorage.setItem(MONITOR_ORDER_STORAGE_KEY, JSON.stringify({
+      providers: ['anthropic', 'openai'],
+      channels: { openai: [3, 1] }
+    }))
+
+    const wrapper = mountGrid([])
+
+    expect(JSON.parse(localStorage.getItem(MONITOR_ORDER_STORAGE_KEY) || '{}')).toEqual({
+      providers: ['anthropic', 'openai'],
+      channels: { openai: [3, 1] }
+    })
+    wrapper.unmount()
+  })
+
+  it('keeps the saved order when the item list becomes empty', async () => {
+    localStorage.setItem(MONITOR_ORDER_STORAGE_KEY, JSON.stringify({
+      providers: ['anthropic'],
+      channels: { anthropic: [2] }
+    }))
+
+    const wrapper = mountGrid([makeItem(2, 'anthropic', 'Anthropic')])
+    await wrapper.setProps({ items: [] })
+
+    expect(JSON.parse(localStorage.getItem(MONITOR_ORDER_STORAGE_KEY) || '{}')).toEqual({
+      providers: ['anthropic'],
+      channels: { anthropic: [2] }
+    })
+    wrapper.unmount()
+  })
+
+  it('persists the dragged provider order so it survives a reload', async () => {
+    const wrapper = mountGrid([
+      makeItem(1, 'openai', 'OpenAI'),
+      makeItem(2, 'anthropic', 'Anthropic')
+    ])
+
+    const outer = wrapper.findAllComponents({ name: 'VueDraggable' })[0]
+    const groups = outer?.props('modelValue') as Array<{ provider: string }>
+    outer?.vm.$emit('update:modelValue', [...groups].reverse())
+    outer?.vm.$emit('end')
+    await nextTick()
+
+    const saved = JSON.parse(localStorage.getItem(MONITOR_ORDER_STORAGE_KEY) || '{}')
+    expect(saved.providers).toEqual(['anthropic', 'openai'])
+    wrapper.unmount()
+  })
+
+  it('persists the dragged channel order inside a provider group', async () => {
+    const wrapper = mountGrid([
+      makeItem(1, 'openai', 'first OpenAI'),
+      makeItem(2, 'openai', 'second OpenAI')
+    ])
+
+    const inner = wrapper.findAllComponents({ name: 'VueDraggable' })[1]
+    const items = inner?.props('modelValue') as Array<{ id: number }>
+    inner?.vm.$emit('update:modelValue', [...items].reverse())
+    inner?.vm.$emit('end')
+    await nextTick()
+
+    const saved = JSON.parse(localStorage.getItem(MONITOR_ORDER_STORAGE_KEY) || '{}')
+    expect(saved.providers).toEqual(['openai'])
+    expect(saved.channels.openai).toEqual([2, 1])
     wrapper.unmount()
   })
 })

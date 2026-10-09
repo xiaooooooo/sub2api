@@ -163,6 +163,9 @@ function readSavedOrder(): SavedOrder {
 }
 
 function persistOrder() {
+  // 没有任何分组时不写存储：组件首次挂载（items 还是空数组）以及监控被关闭
+  // 时都会走到这里，若无条件写入会把用户之前保存的顺序清空，导致刷新后排序失效。
+  if (providerGroups.value.length === 0) return
   const order: SavedOrder = {
     providers: providerGroups.value.map(group => group.provider),
     channels: Object.fromEntries(providerGroups.value.map(group => [
@@ -205,8 +208,6 @@ function reconcileGroups(items: UserMonitorView[]) {
       items: itemOrder.map(id => incomingById.get(id)).filter((item): item is UserMonitorView => Boolean(item)),
     }
   })
-
-  persistOrder()
 }
 
 function handleCardClick(item: UserMonitorView) {
