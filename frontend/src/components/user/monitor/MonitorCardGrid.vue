@@ -100,7 +100,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { VueDraggable } from 'vue-draggable-plus'
 import type { UserMonitorView, UserMonitorDetail } from '@/api/channelMonitor'
@@ -122,14 +122,18 @@ interface SavedOrder {
   channels: Record<string, number[]>
 }
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   items: UserMonitorView[]
   window: '7d' | '15d' | '30d'
   countdownSeconds: number
   loading: boolean
   reordering: boolean
+  canReorder?: boolean
   detailCache: Record<number, UserMonitorDetail>
-}>()
+}>(), {
+  // 默认允许排序：只有显式传入 false（普通用户）时才禁用。
+  canReorder: true,
+})
 
 const emit = defineEmits<{
   (e: 'cardClick', item: UserMonitorView): void
@@ -138,8 +142,10 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const { providerLabel } = useChannelMonitorFormat()
 
+const canReorder = computed(() => props.canReorder !== false)
 const providerGroups = ref<ProviderGroup[]>([])
-const savedOrder = ref<SavedOrder>(readSavedOrder())
+// 只有管理员能调整顺序：普通用户忽略本地保存的顺序，始终看到默认顺序。
+const savedOrder = ref<SavedOrder>(canReorder.value ? readSavedOrder() : { providers: [], channels: {} })
 
 function readSavedOrder(): SavedOrder {
   try {
@@ -163,6 +169,8 @@ function readSavedOrder(): SavedOrder {
 }
 
 function persistOrder() {
+  // 仅管理员可以调整并保存顺序，普通用户不写入本地存储。
+  if (!canReorder.value) return
   // 没有任何分组时不写存储：组件首次挂载（items 还是空数组）以及监控被关闭
   // 时都会走到这里，若无条件写入会把用户之前保存的顺序清空，导致刷新后排序失效。
   if (providerGroups.value.length === 0) return
@@ -215,6 +223,12 @@ function handleCardClick(item: UserMonitorView) {
 }
 
 watch(() => props.items, reconcileGroups, { immediate: true })
+
+// 权限变化（例如管理员退出登录）时回到默认顺序，避免保留管理员的本地排序。
+watch(canReorder, (allowed) => {
+  savedOrder.value = allowed ? readSavedOrder() : { providers: [], channels: {} }
+  reconcileGroups(props.items)
+})
 
 function resolveAvailability(item: UserMonitorView): number | null {
   if (props.window === '7d') {

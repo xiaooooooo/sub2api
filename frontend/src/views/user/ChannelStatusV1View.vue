@@ -6,9 +6,10 @@
       :window="currentWindow"
       :loading="loading"
       :reordering="reordering"
+      :can-reorder="canReorder"
       :auto-refresh="autoRefresh"
       @update:window="handleWindowChange"
-      @toggle-reordering="reordering = !reordering"
+      @toggle-reordering="toggleReordering"
       @refresh="manualReload"
     />
 
@@ -18,6 +19,7 @@
       :countdown-seconds="countdown"
       :loading="loading"
       :reordering="reordering"
+      :can-reorder="canReorder"
       :detail-cache="detailCache"
       @card-click="openDetail"
     />
@@ -35,6 +37,7 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import {
   list as listChannelMonitorViews,
@@ -54,11 +57,14 @@ import { useAutoRefresh } from '@/composables/useAutoRefresh'
 
 const { t } = useI18n()
 const appStore = useAppStore()
+const authStore = useAuthStore()
 
 // ── State ──
 const items = ref<UserMonitorView[]>([])
 const loading = ref(false)
 const reordering = ref(false)
+// 调整渠道/分组排序是管理员专属功能，普通用户只能查看默认顺序。
+const canReorder = computed(() => authStore.isAdmin)
 const currentWindow = ref<MonitorWindow>('7d')
 const detailCache = reactive<Record<number, UserMonitorDetail>>({})
 const showDetail = ref(false)
@@ -147,6 +153,11 @@ function openDetail(row: UserMonitorView) {
   showDetail.value = true
 }
 
+function toggleReordering() {
+  if (!canReorder.value) return
+  reordering.value = !reordering.value
+}
+
 function closeDetail() {
   showDetail.value = false
   detailTarget.value = null
@@ -154,6 +165,11 @@ function closeDetail() {
 
 watch(items, () => {
   void ensureDetailsForWindow()
+})
+
+// 管理员退出登录后立即退出排序模式。
+watch(canReorder, (allowed) => {
+  if (!allowed) reordering.value = false
 })
 
 watch(

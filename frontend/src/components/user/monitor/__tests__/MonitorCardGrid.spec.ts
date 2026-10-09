@@ -46,7 +46,7 @@ function makeItem(id: number, provider: string, name: string): UserMonitorView {
   }
 }
 
-function mountGrid(items: UserMonitorView[]) {
+function mountGrid(items: UserMonitorView[], extraProps: Record<string, unknown> = {}) {
   return mount(MonitorCardGrid, {
     props: {
       items,
@@ -54,7 +54,8 @@ function mountGrid(items: UserMonitorView[]) {
       countdownSeconds: 0,
       loading: false,
       reordering: false,
-      detailCache: {}
+      detailCache: {},
+      ...extraProps
     },
     global: {
       stubs: {
@@ -240,6 +241,43 @@ describe('MonitorCardGrid', () => {
     const saved = JSON.parse(localStorage.getItem(MONITOR_ORDER_STORAGE_KEY) || '{}')
     expect(saved.providers).toEqual(['openai'])
     expect(saved.channels.openai).toEqual([2, 1])
+    wrapper.unmount()
+  })
+
+  // 普通用户（canReorder=false）不允许调整顺序：忽略本地保存的顺序，始终按默认顺序展示。
+  it('ignores the saved order for users who cannot reorder', () => {
+    localStorage.setItem(MONITOR_ORDER_STORAGE_KEY, JSON.stringify({
+      providers: ['anthropic', 'openai'],
+      channels: { openai: [3, 1] }
+    }))
+
+    const wrapper = mountGrid([
+      makeItem(1, 'openai', 'first OpenAI'),
+      makeItem(2, 'anthropic', 'Anthropic'),
+      makeItem(3, 'openai', 'second OpenAI')
+    ], { canReorder: false })
+
+    const sections = wrapper.findAll('section')
+    expect(sections[0]?.attributes('aria-label')).toBe('openai')
+    expect(sections[1]?.attributes('aria-label')).toBe('anthropic')
+    expect(sections[0]?.text().indexOf('first OpenAI')).toBeLessThan(sections[0]?.text().indexOf('second OpenAI') ?? 0)
+    wrapper.unmount()
+  })
+
+  // 普通用户即使触发了拖拽结束事件，也不能把顺序写入本地存储。
+  it('does not persist order for users who cannot reorder', async () => {
+    const wrapper = mountGrid([
+      makeItem(1, 'openai', 'OpenAI'),
+      makeItem(2, 'anthropic', 'Anthropic')
+    ], { canReorder: false })
+
+    const outer = wrapper.findAllComponents({ name: 'VueDraggable' })[0]
+    const groups = outer?.props('modelValue') as Array<{ provider: string }>
+    outer?.vm.$emit('update:modelValue', [...groups].reverse())
+    outer?.vm.$emit('end')
+    await nextTick()
+
+    expect(localStorage.getItem(MONITOR_ORDER_STORAGE_KEY)).toBeNull()
     wrapper.unmount()
   })
 })

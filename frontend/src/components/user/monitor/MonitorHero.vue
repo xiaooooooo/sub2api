@@ -33,6 +33,7 @@
       </span>
 
       <button
+        v-if="canReorder"
         type="button"
         class="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-colors"
         :class="reordering
@@ -77,12 +78,13 @@ import AutoRefreshButton from '@/components/common/AutoRefreshButton.vue'
 export type MonitorWindow = '7d' | '15d' | '30d'
 export type OverallStatus = 'operational' | 'degraded'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   overallStatus: OverallStatus
   intervalSeconds: number
   window: MonitorWindow
   loading: boolean
   reordering: boolean
+  canReorder?: boolean
   autoRefresh?: {
     enabled: { value: boolean }
     intervalSeconds: { value: number }
@@ -91,7 +93,10 @@ const props = defineProps<{
     setEnabled: (v: boolean) => void
     setInterval: (v: number) => void
   }
-}>()
+}>(), {
+  // 默认显示排序开关；只有显式传入 false（普通用户）时才隐藏。
+  canReorder: true,
+})
 
 const emit = defineEmits<{
   (e: 'update:window', value: MonitorWindow): void
