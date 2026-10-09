@@ -577,6 +577,7 @@ export default {
     finishOrdering: 'Done ordering',
     dragProvider: 'Drag provider group',
     dragChannel: 'Drag channel',
+    orderSaveError: 'Failed to save the order. Please try again.',
     windowTab: {
       '7d': '7 days',
       '15d': '15 days',

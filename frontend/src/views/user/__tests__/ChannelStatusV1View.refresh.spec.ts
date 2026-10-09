@@ -2,8 +2,20 @@ import { flushPromises, shallowMount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ChannelStatusV1View from '../ChannelStatusV1View.vue'
 
-const { list } = vi.hoisted(() => ({ list: vi.fn() }))
-vi.mock('@/api/channelMonitor', () => ({ list, status: vi.fn() }))
+const { list, getOrder, saveOrder } = vi.hoisted(() => ({ list: vi.fn(), getOrder: vi.fn(), saveOrder: vi.fn() }))
+vi.mock('@/api/channelMonitor', () => ({
+  list,
+  status: vi.fn(),
+  getOrder,
+  saveOrder,
+  readLocalChannelMonitorOrder: () => null,
+  normalizeChannelMonitorOrder: (order?: { providers?: string[]; channels?: Record<string, number[]> } | null) => ({
+    providers: Array.isArray(order?.providers) ? order.providers : [],
+    channels: order?.channels && typeof order.channels === 'object' ? order.channels : {},
+  }),
+  isEmptyChannelMonitorOrder: (order?: { providers?: string[]; channels?: Record<string, number[]> } | null) =>
+    (order?.providers?.length ?? 0) === 0 && Object.keys(order?.channels ?? {}).length === 0,
+}))
 vi.mock('@/stores/app', () => ({ useAppStore: () => ({ cachedPublicSettings: { channel_monitor_enabled: true }, showError: vi.fn() }) }))
 vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ isAdmin: true }) }))
 vi.mock('vue-i18n', async () => ({
@@ -21,7 +33,13 @@ const mountView = () => shallowMount(ChannelStatusV1View, {
   } },
 })
 let wrapper: ReturnType<typeof mountView>
-beforeEach(() => { vi.useFakeTimers(); localStorage.clear(); list.mockReset().mockResolvedValue({ items: [] }) })
+beforeEach(() => {
+  vi.useFakeTimers()
+  localStorage.clear()
+  list.mockReset().mockResolvedValue({ items: [] })
+  getOrder.mockReset().mockResolvedValue({ providers: [], channels: {} })
+  saveOrder.mockReset().mockImplementation(async (order: unknown) => order)
+})
 afterEach(() => { wrapper?.unmount(); vi.useRealTimers(); localStorage.clear() })
 
 describe('channel monitor refresh interval', () => {

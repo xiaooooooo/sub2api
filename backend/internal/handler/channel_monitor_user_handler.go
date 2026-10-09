@@ -193,3 +193,39 @@ func (h *ChannelMonitorUserHandler) GetStatus(c *gin.Context) {
 	}
 	response.Success(c, userMonitorDetailToResponse(detail))
 }
+
+// GetOrder GET /api/v1/channel-monitors/order
+// 返回全站统一的渠道展示顺序：任何登录用户都可读，未设置时返回空顺序。
+// 功能关闭（或非 v1 模式）时返回空顺序，与 List 的行为保持一致。
+func (h *ChannelMonitorUserHandler) GetOrder(c *gin.Context) {
+	if !h.featureEnabled(c) {
+		response.Success(c, gin.H{"order": service.EmptyChannelMonitorOrder()})
+		return
+	}
+	if h.settingService == nil {
+		response.Success(c, gin.H{"order": service.EmptyChannelMonitorOrder()})
+		return
+	}
+	order := h.settingService.GetChannelMonitorOrder(c.Request.Context())
+	response.Success(c, gin.H{"order": order})
+}
+
+// UpdateOrder PUT /api/v1/channel-monitors/order
+// 保存全站统一的渠道展示顺序：管理员排一次，所有用户都按这个顺序查看。
+// 路由层已用 middleware.AdminOnly 拦截非管理员。
+func (h *ChannelMonitorUserHandler) UpdateOrder(c *gin.Context) {
+	var input service.ChannelMonitorOrder
+	if err := c.ShouldBindJSON(&input); err != nil {
+		response.BadRequest(c, "invalid channel monitor order")
+		return
+	}
+	if h.settingService == nil {
+		response.Success(c, gin.H{"order": input})
+		return
+	}
+	if err := h.settingService.SetChannelMonitorOrder(c.Request.Context(), input); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"order": input})
+}

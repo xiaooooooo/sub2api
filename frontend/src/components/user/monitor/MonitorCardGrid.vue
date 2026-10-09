@@ -103,23 +103,21 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { VueDraggable } from 'vue-draggable-plus'
-import type { UserMonitorView, UserMonitorDetail } from '@/api/channelMonitor'
+import {
+  normalizeChannelMonitorOrder,
+  type UserMonitorView,
+  type UserMonitorDetail,
+  type ChannelMonitorOrder,
+} from '@/api/channelMonitor'
 import { useChannelMonitorFormat } from '@/composables/useChannelMonitorFormat'
 import EmptyState from '@/components/common/EmptyState.vue'
 import MonitorCard from './MonitorCard.vue'
 import ProviderIcon from './ProviderIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 
-const MONITOR_ORDER_STORAGE_KEY = 'sub2api:channel-monitor-order:v1'
-
 interface ProviderGroup {
   provider: string
   items: UserMonitorView[]
-}
-
-interface SavedOrder {
-  providers: string[]
-  channels: Record<string, number[]>
 }
 
 const props = withDefaults(defineProps<{
@@ -129,14 +127,17 @@ const props = withDefaults(defineProps<{
   loading: boolean
   reordering: boolean
   canReorder?: boolean
+  order?: ChannelMonitorOrder | null
   detailCache: Record<number, UserMonitorDetail>
 }>(), {
   // 默认允许排序：只有显式传入 false（普通用户）时才禁用。
   canReorder: true,
+  order: null,
 })
 
 const emit = defineEmits<{
   (e: 'cardClick', item: UserMonitorView): void
+  (e: 'orderChange', order: ChannelMonitorOrder): void
 }>()
 
 const { t } = useI18n()
@@ -144,49 +145,25 @@ const { providerLabel } = useChannelMonitorFormat()
 
 const canReorder = computed(() => props.canReorder !== false)
 const providerGroups = ref<ProviderGroup[]>([])
-// 只有管理员能调整顺序：普通用户忽略本地保存的顺序，始终看到默认顺序。
-const savedOrder = ref<SavedOrder>(canReorder.value ? readSavedOrder() : { providers: [], channels: {} })
 
-function readSavedOrder(): SavedOrder {
-  try {
-    const raw = globalThis.localStorage?.getItem(MONITOR_ORDER_STORAGE_KEY)
-    if (!raw) return { providers: [], channels: {} }
-    const parsed = JSON.parse(raw) as Partial<SavedOrder>
-    return {
-      providers: Array.isArray(parsed.providers)
-        ? parsed.providers.filter((provider): provider is string => typeof provider === 'string')
-        : [],
-      channels: parsed.channels && typeof parsed.channels === 'object'
-        ? Object.fromEntries(Object.entries(parsed.channels).map(([provider, ids]) => [
-          provider,
-          Array.isArray(ids) ? ids.filter((id): id is number => Number.isInteger(id)) : [],
-        ]))
-        : {},
-    }
-  } catch {
-    return { providers: [], channels: {} }
-  }
+// 全站统一顺序：以服务端下发的 order 为准，管理员排一次所有用户都按它展示。
+function currentOrder(): ChannelMonitorOrder {
+  return normalizeChannelMonitorOrder(props.order)
 }
 
 function persistOrder() {
-  // 仅管理员可以调整并保存顺序，普通用户不写入本地存储。
+  // 仅管理员可以调整顺序；普通用户只读服务端下发的顺序。
   if (!canReorder.value) return
-  // 没有任何分组时不写存储：组件首次挂载（items 还是空数组）以及监控被关闭
-  // 时都会走到这里，若无条件写入会把用户之前保存的顺序清空，导致刷新后排序失效。
+  // 没有任何分组时不提交：组件首次挂载（items 还是空数组）以及监控被关闭
+  // 时都会走到这里，若提交空顺序会把管理员已保存的全站顺序清空。
   if (providerGroups.value.length === 0) return
-  const order: SavedOrder = {
+  emit('orderChange', {
     providers: providerGroups.value.map(group => group.provider),
     channels: Object.fromEntries(providerGroups.value.map(group => [
       group.provider,
       group.items.map(item => item.id),
     ])),
-  }
-  savedOrder.value = order
-  try {
-    globalThis.localStorage?.setItem(MONITOR_ORDER_STORAGE_KEY, JSON.stringify(order))
-  } catch {
-    // Storage can be unavailable in private browsing; ordering still works for this view.
-  }
+  })
 }
 
 function reconcileGroups(items: UserMonitorView[]) {
@@ -199,9 +176,11 @@ function reconcileGroups(items: UserMonitorView[]) {
   }
   const incomingProviders = Array.from(groups.keys())
   const currentProviders = providerGroups.value.map(group => group.provider)
+  const order = currentOrder()
+  // 服务端顺序优先，其次是当前渲染顺序，最后按首次出现的顺序追加新分组。
   const providerOrder = [...new Set([
+    ...order.providers,
     ...currentProviders,
-    ...savedOrder.value.providers,
     ...incomingProviders,
   ])].filter(provider => groups.has(provider))
 
@@ -209,8 +188,8 @@ function reconcileGroups(items: UserMonitorView[]) {
     const incoming = groups.get(provider) || []
     const incomingById = new Map(incoming.map(item => [item.id, item]))
     const currentIds = providerGroups.value.find(group => group.provider === provider)?.items.map(item => item.id) || []
-    const savedIds = savedOrder.value.channels[provider] || []
-    const itemOrder = [...new Set([...currentIds, ...savedIds, ...incoming.map(item => item.id)])]
+    const savedIds = order.channels[provider] || []
+    const itemOrder = [...new Set([...savedIds, ...currentIds, ...incoming.map(item => item.id)])]
     return {
       provider,
       items: itemOrder.map(id => incomingById.get(id)).filter((item): item is UserMonitorView => Boolean(item)),
@@ -224,11 +203,8 @@ function handleCardClick(item: UserMonitorView) {
 
 watch(() => props.items, reconcileGroups, { immediate: true })
 
-// 权限变化（例如管理员退出登录）时回到默认顺序，避免保留管理员的本地排序。
-watch(canReorder, (allowed) => {
-  savedOrder.value = allowed ? readSavedOrder() : { providers: [], channels: {} }
-  reconcileGroups(props.items)
-})
+// 服务端顺序变化（管理员保存成功、其他管理员更新）时立即套用。
+watch(() => props.order, () => reconcileGroups(props.items))
 
 function resolveAvailability(item: UserMonitorView): number | null {
   if (props.window === '7d') {

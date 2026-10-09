@@ -510,6 +510,12 @@ const (
 	// fail-closed (only the literal "true" enables it). Admin endpoints always
 	// keep the full snapshots regardless of this flag.
 	SettingKeyChannelMonitorShowQuota = "channel_monitor_show_quota"
+	// SettingKeyChannelMonitorOrder stores the admin-defined display order of the
+	// user-facing channel monitor page so every user sees the same order.
+	// Value is JSON: {"providers":["openai"],"channels":{"openai":[3,1]}}.
+	// Missing/invalid values fall back to the default (server) order. Readable by
+	// every authenticated user; only admins may write it.
+	SettingKeyChannelMonitorOrder = "channel_monitor_order"
 	// SettingKeyChannelMonitorHideUserRanking hides the user ranking tab and
 	// /users payload from non-admin channel-monitor v2 viewers.
 	// Default false (keep the current ranking tab). Admin endpoints always keep it.

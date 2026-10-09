@@ -582,6 +582,7 @@ export default {
     finishOrdering: '完成排序',
     dragProvider: '拖动供应商分组',
     dragChannel: '拖动渠道',
+    orderSaveError: '保存排序失败，请重试',
     windowTab: {
       '7d': '7 天',
       '15d': '15 天',

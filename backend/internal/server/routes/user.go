@@ -139,6 +139,9 @@ func RegisterUserRoutes(
 		monitors := authenticated.Group("/channel-monitors")
 		{
 			monitors.GET("", h.ChannelMonitor.List)
+			// 全站统一顺序：所有登录用户可读，仅管理员可写（管理员排一次，全站生效）
+			monitors.GET("/order", h.ChannelMonitor.GetOrder)
+			monitors.PUT("/order", middleware.AdminOnly(), h.ChannelMonitor.UpdateOrder)
 			monitors.GET("/:id/status", h.ChannelMonitor.GetStatus)
 		}
 

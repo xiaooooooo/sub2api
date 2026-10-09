@@ -20,8 +20,10 @@
       :loading="loading"
       :reordering="reordering"
       :can-reorder="canReorder"
+      :order="monitorOrder"
       :detail-cache="detailCache"
       @card-click="openDetail"
+      @order-change="handleOrderChange"
     />
 
     <MonitorDetailDialog
@@ -42,6 +44,12 @@ import { extractApiErrorMessage } from '@/utils/apiError'
 import {
   list as listChannelMonitorViews,
   status as fetchChannelMonitorDetail,
+  getOrder as fetchChannelMonitorOrder,
+  saveOrder as persistChannelMonitorOrder,
+  readLocalChannelMonitorOrder,
+  normalizeChannelMonitorOrder,
+  isEmptyChannelMonitorOrder,
+  type ChannelMonitorOrder,
   type UserMonitorView,
   type UserMonitorDetail,
 } from '@/api/channelMonitor'
@@ -65,6 +73,8 @@ const loading = ref(false)
 const reordering = ref(false)
 // 调整渠道/分组排序是管理员专属功能，普通用户只能查看默认顺序。
 const canReorder = computed(() => authStore.isAdmin)
+// 全站统一的展示顺序：管理员保存一次，所有用户共用服务端这一份。
+const monitorOrder = ref<ChannelMonitorOrder>(normalizeChannelMonitorOrder(null))
 const currentWindow = ref<MonitorWindow>('7d')
 const detailCache = reactive<Record<number, UserMonitorDetail>>({})
 const showDetail = ref(false)
@@ -128,6 +138,41 @@ async function manualReload() {
   }
 }
 
+// ── Channel monitor order (site-wide) ──
+// 排序由管理员设置一次，服务端保存，所有用户读取同一份顺序。
+let localOrderMigrationAttempted = false
+
+async function loadMonitorOrder() {
+  try {
+    const order = await fetchChannelMonitorOrder()
+    monitorOrder.value = order
+    await maybeMigrateLocalOrder(order)
+  } catch {
+    // 读取失败时保持默认顺序，不阻塞渠道列表展示。
+  }
+}
+
+// 一次性迁移：旧版本把顺序存在浏览器本地，服务端还没有顺序时把它补写上去。
+async function maybeMigrateLocalOrder(serverOrder: ChannelMonitorOrder) {
+  if (localOrderMigrationAttempted) return
+  localOrderMigrationAttempted = true
+  if (!canReorder.value || !isEmptyChannelMonitorOrder(serverOrder)) return
+  const local = readLocalChannelMonitorOrder()
+  if (!local || isEmptyChannelMonitorOrder(local)) return
+  await handleOrderChange(local)
+}
+
+async function handleOrderChange(order: ChannelMonitorOrder) {
+  // 先本地生效再异步保存，避免保存期间顺序回跳。
+  monitorOrder.value = normalizeChannelMonitorOrder(order)
+  try {
+    monitorOrder.value = await persistChannelMonitorOrder(monitorOrder.value)
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t('channelStatus.orderSaveError')))
+    await loadMonitorOrder()
+  }
+}
+
 async function loadDetail(id: number, force = false) {
   if (!force && detailCache[id]) return
   try {
@@ -182,6 +227,7 @@ watch(
 
 onMounted(() => {
   void reload(false)
+  void loadMonitorOrder()
   if (appStore.cachedPublicSettings?.channel_monitor_enabled !== false) {
     autoRefresh.setEnabled(autoRefresh.enabled.value)
   }

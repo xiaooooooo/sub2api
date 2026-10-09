@@ -1,8 +1,25 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import MonitorCardGrid from '../MonitorCardGrid.vue'
-import type { UserMonitorView } from '@/api/channelMonitor'
+import type { ChannelMonitorOrder, UserMonitorView } from '@/api/channelMonitor'
+
+vi.mock('@/api/channelMonitor', () => ({
+  normalizeChannelMonitorOrder: (order?: Partial<ChannelMonitorOrder> | null) => {
+    const providers = Array.isArray(order?.providers)
+      ? order.providers.filter((provider): provider is string => typeof provider === 'string')
+      : []
+    const channels: Record<string, number[]> = {}
+    if (order?.channels && typeof order.channels === 'object') {
+      for (const [provider, ids] of Object.entries(order.channels)) {
+        channels[provider] = Array.isArray(ids)
+          ? ids.filter((id): id is number => Number.isInteger(id))
+          : []
+      }
+    }
+    return { providers, channels }
+  }
+}))
 
 vi.mock('vue-i18n', async (importOriginal) => ({
   ...await importOriginal<typeof import('vue-i18n')>(),
@@ -28,8 +45,6 @@ const DraggableStub = {
   template: '<div><slot /></div>'
 }
 
-const MONITOR_ORDER_STORAGE_KEY = 'sub2api:channel-monitor-order:v1'
-
 function makeItem(id: number, provider: string, name: string): UserMonitorView {
   return {
     id,
@@ -46,6 +61,10 @@ function makeItem(id: number, provider: string, name: string): UserMonitorView {
   }
 }
 
+function emptyOrder(): ChannelMonitorOrder {
+  return { providers: [], channels: {} }
+}
+
 function mountGrid(items: UserMonitorView[], extraProps: Record<string, unknown> = {}) {
   return mount(MonitorCardGrid, {
     props: {
@@ -54,6 +73,7 @@ function mountGrid(items: UserMonitorView[], extraProps: Record<string, unknown>
       countdownSeconds: 0,
       loading: false,
       reordering: false,
+      order: emptyOrder(),
       detailCache: {},
       ...extraProps
     },
@@ -69,10 +89,6 @@ function mountGrid(items: UserMonitorView[], extraProps: Record<string, unknown>
 }
 
 describe('MonitorCardGrid', () => {
-  beforeEach(() => {
-    localStorage.clear()
-  })
-
   it('groups cards by provider while keeping each provider section ordered by first occurrence', () => {
     const wrapper = mountGrid([
       makeItem(1, 'openai', 'first OpenAI'),
@@ -103,23 +119,7 @@ describe('MonitorCardGrid', () => {
 
   it('forwards the clicked card item', async () => {
     const item = makeItem(1, 'openai', 'OpenAI channel')
-    const wrapper = mount(MonitorCardGrid, {
-      props: {
-        items: [item],
-        window: '7d',
-        countdownSeconds: 0,
-        loading: false,
-        reordering: false,
-        detailCache: {}
-      },
-      global: {
-        stubs: {
-          MonitorCard: MonitorCardStub,
-          VueDraggable: DraggableStub,
-          ProviderIcon: true
-        }
-      }
-    })
+    const wrapper = mountGrid([item])
 
     await wrapper.get('.monitor-card').trigger('click')
 
@@ -127,17 +127,28 @@ describe('MonitorCardGrid', () => {
     wrapper.unmount()
   })
 
-  it('restores provider and channel order from localStorage', () => {
-    localStorage.setItem(MONITOR_ORDER_STORAGE_KEY, JSON.stringify({
-      providers: ['anthropic', 'openai'],
-      channels: { openai: [3, 1] }
-    }))
-
+  // 全站统一顺序：服务端下发的 order 决定分组顺序与分组内顺序。
+  it('applies the order provided by the parent', () => {
     const wrapper = mountGrid([
       makeItem(1, 'openai', 'first OpenAI'),
       makeItem(2, 'anthropic', 'Anthropic'),
       makeItem(3, 'openai', 'second OpenAI')
-    ])
+    ], { order: { providers: ['anthropic', 'openai'], channels: { openai: [3, 1] } } })
+
+    const sections = wrapper.findAll('section')
+    expect(sections[0]?.attributes('aria-label')).toBe('anthropic')
+    expect(sections[1]?.attributes('aria-label')).toBe('openai')
+    expect(sections[1]?.text().indexOf('second OpenAI')).toBeLessThan(sections[1]?.text().indexOf('first OpenAI') ?? 0)
+    wrapper.unmount()
+  })
+
+  // 普通用户不能排序，但必须按管理员保存的全站顺序展示。
+  it('applies the site-wide order for users who cannot reorder', () => {
+    const wrapper = mountGrid([
+      makeItem(1, 'openai', 'first OpenAI'),
+      makeItem(2, 'anthropic', 'Anthropic'),
+      makeItem(3, 'openai', 'second OpenAI')
+    ], { canReorder: false, order: { providers: ['anthropic', 'openai'], channels: { openai: [3, 1] } } })
 
     const sections = wrapper.findAll('section')
     expect(sections[0]?.attributes('aria-label')).toBe('anthropic')
@@ -147,16 +158,11 @@ describe('MonitorCardGrid', () => {
   })
 
   it('appends new providers and channels without changing saved items', () => {
-    localStorage.setItem(MONITOR_ORDER_STORAGE_KEY, JSON.stringify({
-      providers: ['openai'],
-      channels: { openai: [1] }
-    }))
-
     const wrapper = mountGrid([
       makeItem(2, 'anthropic', 'Anthropic'),
       makeItem(1, 'openai', 'OpenAI'),
       makeItem(3, 'openai', 'New OpenAI')
-    ])
+    ], { order: { providers: ['openai'], channels: { openai: [1] } } })
 
     const sections = wrapper.findAll('section')
     expect(sections[0]?.attributes('aria-label')).toBe('openai')
@@ -165,51 +171,48 @@ describe('MonitorCardGrid', () => {
     wrapper.unmount()
   })
 
-  it('ignores malformed saved ordering data', () => {
-    localStorage.setItem(MONITOR_ORDER_STORAGE_KEY, '{not-json')
+  it('ignores malformed order data', () => {
+    const wrapper = mountGrid([
+      makeItem(1, 'openai', 'OpenAI'),
+      makeItem(2, 'anthropic', 'Anthropic')
+    ], { order: { providers: [123 as unknown as string], channels: { openai: ['x' as unknown as number] } } })
+
+    expect(wrapper.findAll('section')[0]?.attributes('aria-label')).toBe('openai')
+    wrapper.unmount()
+  })
+
+  it('re-applies the order when the parent updates it', async () => {
     const wrapper = mountGrid([
       makeItem(1, 'openai', 'OpenAI'),
       makeItem(2, 'anthropic', 'Anthropic')
     ])
 
     expect(wrapper.findAll('section')[0]?.attributes('aria-label')).toBe('openai')
+    await wrapper.setProps({ order: { providers: ['anthropic', 'openai'], channels: {} } })
+    expect(wrapper.findAll('section')[0]?.attributes('aria-label')).toBe('anthropic')
     wrapper.unmount()
   })
 
-  // 回归：组件首次挂载时 props.items 还是空数组，此时不能把已保存的排序写空，
-  // 否则用户每次刷新页面都会丢失自定义顺序。
-  it('keeps the saved order when it mounts before the items arrive', () => {
-    localStorage.setItem(MONITOR_ORDER_STORAGE_KEY, JSON.stringify({
-      providers: ['anthropic', 'openai'],
-      channels: { openai: [3, 1] }
-    }))
+  // 回归：组件首次挂载时 props.items 还是空数组，随后才拿到数据，
+  // 此时仍要按服务端顺序展示。
+  it('keeps the parent order when it mounts before the items arrive', async () => {
+    const wrapper = mountGrid([], { order: { providers: ['anthropic', 'openai'], channels: { openai: [3, 1] } } })
 
-    const wrapper = mountGrid([])
-
-    expect(JSON.parse(localStorage.getItem(MONITOR_ORDER_STORAGE_KEY) || '{}')).toEqual({
-      providers: ['anthropic', 'openai'],
-      channels: { openai: [3, 1] }
+    await wrapper.setProps({
+      items: [
+        makeItem(1, 'openai', 'first OpenAI'),
+        makeItem(2, 'anthropic', 'Anthropic'),
+        makeItem(3, 'openai', 'second OpenAI')
+      ]
     })
+
+    const sections = wrapper.findAll('section')
+    expect(sections[0]?.attributes('aria-label')).toBe('anthropic')
+    expect(sections[1]?.attributes('aria-label')).toBe('openai')
     wrapper.unmount()
   })
 
-  it('keeps the saved order when the item list becomes empty', async () => {
-    localStorage.setItem(MONITOR_ORDER_STORAGE_KEY, JSON.stringify({
-      providers: ['anthropic'],
-      channels: { anthropic: [2] }
-    }))
-
-    const wrapper = mountGrid([makeItem(2, 'anthropic', 'Anthropic')])
-    await wrapper.setProps({ items: [] })
-
-    expect(JSON.parse(localStorage.getItem(MONITOR_ORDER_STORAGE_KEY) || '{}')).toEqual({
-      providers: ['anthropic'],
-      channels: { anthropic: [2] }
-    })
-    wrapper.unmount()
-  })
-
-  it('persists the dragged provider order so it survives a reload', async () => {
+  it('emits the dragged provider order so the parent can save it', async () => {
     const wrapper = mountGrid([
       makeItem(1, 'openai', 'OpenAI'),
       makeItem(2, 'anthropic', 'Anthropic')
@@ -221,12 +224,13 @@ describe('MonitorCardGrid', () => {
     outer?.vm.$emit('end')
     await nextTick()
 
-    const saved = JSON.parse(localStorage.getItem(MONITOR_ORDER_STORAGE_KEY) || '{}')
-    expect(saved.providers).toEqual(['anthropic', 'openai'])
+    expect(wrapper.emitted('orderChange')).toEqual([[
+      { providers: ['anthropic', 'openai'], channels: { anthropic: [2], openai: [1] } }
+    ]])
     wrapper.unmount()
   })
 
-  it('persists the dragged channel order inside a provider group', async () => {
+  it('emits the dragged channel order inside a provider group', async () => {
     const wrapper = mountGrid([
       makeItem(1, 'openai', 'first OpenAI'),
       makeItem(2, 'openai', 'second OpenAI')
@@ -238,34 +242,14 @@ describe('MonitorCardGrid', () => {
     inner?.vm.$emit('end')
     await nextTick()
 
-    const saved = JSON.parse(localStorage.getItem(MONITOR_ORDER_STORAGE_KEY) || '{}')
-    expect(saved.providers).toEqual(['openai'])
-    expect(saved.channels.openai).toEqual([2, 1])
+    expect(wrapper.emitted('orderChange')).toEqual([[
+      { providers: ['openai'], channels: { openai: [2, 1] } }
+    ]])
     wrapper.unmount()
   })
 
-  // 普通用户（canReorder=false）不允许调整顺序：忽略本地保存的顺序，始终按默认顺序展示。
-  it('ignores the saved order for users who cannot reorder', () => {
-    localStorage.setItem(MONITOR_ORDER_STORAGE_KEY, JSON.stringify({
-      providers: ['anthropic', 'openai'],
-      channels: { openai: [3, 1] }
-    }))
-
-    const wrapper = mountGrid([
-      makeItem(1, 'openai', 'first OpenAI'),
-      makeItem(2, 'anthropic', 'Anthropic'),
-      makeItem(3, 'openai', 'second OpenAI')
-    ], { canReorder: false })
-
-    const sections = wrapper.findAll('section')
-    expect(sections[0]?.attributes('aria-label')).toBe('openai')
-    expect(sections[1]?.attributes('aria-label')).toBe('anthropic')
-    expect(sections[0]?.text().indexOf('first OpenAI')).toBeLessThan(sections[0]?.text().indexOf('second OpenAI') ?? 0)
-    wrapper.unmount()
-  })
-
-  // 普通用户即使触发了拖拽结束事件，也不能把顺序写入本地存储。
-  it('does not persist order for users who cannot reorder', async () => {
+  // 普通用户不允许调整顺序：即使触发了拖拽结束事件也不能提交。
+  it('does not emit orderChange for users who cannot reorder', async () => {
     const wrapper = mountGrid([
       makeItem(1, 'openai', 'OpenAI'),
       makeItem(2, 'anthropic', 'Anthropic')
@@ -277,7 +261,7 @@ describe('MonitorCardGrid', () => {
     outer?.vm.$emit('end')
     await nextTick()
 
-    expect(localStorage.getItem(MONITOR_ORDER_STORAGE_KEY)).toBeNull()
+    expect(wrapper.emitted('orderChange')).toBeUndefined()
     wrapper.unmount()
   })
 })
