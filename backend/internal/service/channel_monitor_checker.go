@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -27,7 +28,11 @@ var monitorPingHTTPClient = newSSRFSafeHTTPClient(monitorPingTimeout)
 // newSSRFSafeHTTPClient 返回一个使用 safeDialContext 的 http.Client。
 // 仅供监控模块对外发起请求使用——所有目标都应是公网 endpoint。
 func newSSRFSafeHTTPClient(timeout time.Duration) *http.Client {
-	tr := &http.Transport{
+	return &http.Client{Timeout: timeout, Transport: servertiming.WrapRoundTripper(newMonitorHTTPTransport())}
+}
+
+func newMonitorHTTPTransport() *http.Transport {
+	return &http.Transport{
 		DialContext:           safeDialContext,
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          16,
@@ -35,7 +40,6 @@ func newSSRFSafeHTTPClient(timeout time.Duration) *http.Client {
 		TLSHandshakeTimeout:   monitorTLSHandshakeTimeout,
 		ResponseHeaderTimeout: monitorResponseHeaderTimeout,
 	}
-	return &http.Client{Timeout: timeout, Transport: servertiming.WrapRoundTripper(tr)}
 }
 
 // CheckOptions 承载一次检测的自定义入参。
@@ -545,15 +549,29 @@ func postRawJSON(ctx context.Context, fullURL string, payload []byte, headers ma
 
 	resp, err := monitorHTTPClient.Do(req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("do request: %w", err)
+		return nil, 0, wrapMonitorProbeError("before response headers", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, monitorResponseMaxBytes))
 	if err != nil {
-		return nil, resp.StatusCode, fmt.Errorf("read body: %w", err)
+		return nil, resp.StatusCode, wrapMonitorProbeError(fmt.Sprintf("reading response body, HTTP %d", resp.StatusCode), err)
 	}
 	return respBody, resp.StatusCode, nil
+}
+
+// wrapMonitorProbeError 标明探测失败阶段；超时/取消不代表上游返回了 HTTP 错误。
+// 保留原始错误链，最终在 runCheckForModel 中统一脱敏和截断。
+func wrapMonitorProbeError(stage string, err error) error {
+	kind := "probe request failed"
+	var netErr net.Error
+	switch {
+	case errors.Is(err, context.Canceled):
+		kind = "probe canceled"
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &netErr) && netErr.Timeout():
+		kind = "probe timeout"
+	}
+	return fmt.Errorf("%s (%s): %w", kind, stage, err)
 }
 
 // monitorRequestPath 返回探测请求路径。智谱按 endpoint 区分：
